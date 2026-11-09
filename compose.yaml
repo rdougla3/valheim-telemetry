@@ -1,0 +1,81 @@
+services:
+  valheim:
+    image: valheim-community-runtime:local
+    build:
+      context: .
+      dockerfile: valheim/Dockerfile
+    container_name: ${VALHEIM_CONTAINER_NAME:-valheim-server}
+    user: "${RUN_UID:-1000}:${RUN_GID:-1000}"
+    network_mode: host
+    env_file: .env
+    environment:
+      HOME: /opt/valheim/home
+      VALHEIM_SERVER_DIR: /opt/valheim/server
+      VALHEIM_SAVE_DIR: /opt/valheim/data
+      VALHEIM_STEAMCMD_DIR: /opt/valheim/steamcmd
+      VALHEIM_LIVE_PATH: /opt/valheim-dashboard/data/live.json
+    restart: unless-stopped
+    stop_signal: SIGINT
+    stop_grace_period: 120s
+    volumes:
+      - ./valheim/server:/opt/valheim/server
+      - ./valheim/data:/opt/valheim/data
+      - ./valheim/steamcmd:/opt/valheim/steamcmd
+      - ./valheim/home:/opt/valheim/home
+      - ./valheim-dashboard/data:/opt/valheim-dashboard/data
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: journald
+      options:
+        tag: "${VALHEIM_CONTAINER_NAME:-valheim-server}"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import json,time; from pathlib import Path; from datetime import datetime; d=json.loads(Path('/opt/valheim-dashboard/data/live.json').read_text()); assert time.time()-datetime.fromisoformat(d['observed_at'].replace('Z','+00:00')).timestamp()<30"]
+      interval: 30s
+      timeout: 5s
+      start_period: 300s
+      retries: 3
+  dashboard:
+    image: valheim-community-runtime:local
+    user: "${RUN_UID:-1000}:${RUN_GID:-1000}"
+    working_dir: /opt/valheim-dashboard
+    command: ["/bin/bash", "-c", "umask 0077; exec python3 app.py"]
+    environment:
+      SERVER_NAME: "${SERVER_NAME:-Valheim Server}"
+      WORLD_NAME: "${WORLD_NAME:-MyWorld}"
+      CROSSPLAY: "${CROSSPLAY:-true}"
+      DASHBOARD_TITLE: "${DASHBOARD_TITLE:-}"
+      DASHBOARD_BRAND: "${DASHBOARD_BRAND:-Valheim}"
+      DASHBOARD_SUBTITLE: "${DASHBOARD_SUBTITLE:-The realm chronicle}"
+      DASHBOARD_DESCRIPTION: "${DASHBOARD_DESCRIPTION:-Player activity and world progress.}"
+      DASHBOARD_TIMEZONE: "${DASHBOARD_TIMEZONE:-UTC}"
+      DASHBOARD_LOCALE: "${DASHBOARD_LOCALE:-en-US}"
+      DASHBOARD_URL_PREFIXES: "${DASHBOARD_URL_PREFIXES:-/valheim}"
+      VALHEIM_JOURNAL_USER_UNIT: "${VALHEIM_JOURNAL_USER_UNIT:-}"
+      RUN_UID: "${RUN_UID:-1000}"
+      TZ: "${TZ:-UTC}"
+      DASHBOARD_HOST: 0.0.0.0
+      DASHBOARD_PORT: "8080"
+      VALHEIM_SAVE_DIR: /opt/valheim/data
+      VALHEIM_DASHBOARD_DATA: /opt/valheim-dashboard/data
+      VALHEIM_JOURNAL_CONTAINER: "${VALHEIM_CONTAINER_NAME:-valheim-server}"
+    restart: unless-stopped
+    depends_on:
+      valheim:
+        condition: service_healthy
+        restart: true
+    ports:
+      - "${DASHBOARD_BIND:-127.0.0.1}:${DASHBOARD_PORT:-8080}:8080"
+    group_add: ["${JOURNAL_GID:-999}"]
+    volumes:
+      - ./valheim-dashboard/data:/opt/valheim-dashboard/data
+      - ./valheim/data:/opt/valheim/data:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8080/api/dashboard',timeout=5)); assert d['error'] is None and d['world']"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 3
